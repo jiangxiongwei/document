@@ -1,0 +1,145 @@
+在使用 libbpf-bootstrap 时，需要首先安装 LLVM 和依赖库文件：
+
+sudo apt install -y bison build-essential cmake flex git libedit-dev pkg-config libmnl-dev \
+   python zlib1g-dev libssl-dev libelf-dev libcap-dev libfl-dev llvm clang pkg-config \
+   gcc-multilib luajit libluajit-5.1-dev libncurses5-dev libclang-dev clang-tools
+然后检出其脚手架代码，检查示例代码是否可以编译通过：
+
+# checkout libbpf-bootstrap
+git clone https://github.com/libbpf/libbpf-bootstrap
+# update submodules
+git submodule update --init --recursive
+# build existing samples
+cd src && make
+接下来，创建两个文件，分别是用户空间的 hello.c 以及 BPF 程序 hello.bpf.c（libbpf-bootstrap 要求 BPF 文件的格式总是 <APP-NAME>.bpf.c）。
+
+/* cat hello.bpf.c */
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+
+SEC("tracepoint/syscalls/sys_enter_execve")
+int handle_tp(void *ctx)
+{
+    int pid = bpf_get_current_pid_tgid()>> 32;
+    char fmt[] = "BPF triggered from PID %d.\n";
+    bpf_trace_printk(fmt, sizeof(fmt), pid);
+    return 0;
+}
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+
+/* cat hello.c */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/resource.h>
+#include <bpf/libbpf.h>
+#include "hello.skel.h"
+
+#define DEBUGFS "/sys/kernel/debug/tracing/"
+
+/* logging function used for debugging */
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+#ifdef DEBUGBPF
+    return vfprintf(stderr, format, args);
+#else
+    return 0;
+#endif
+}
+
+/* read trace logs from debug fs */
+void read_trace_pipe(void)
+{
+    int trace_fd;
+
+    trace_fd = open(DEBUGFS "trace_pipe", O_RDONLY, 0);
+    if (trace_fd < 0)
+        return;
+
+    while (1) {
+        static char buf[4096];
+        ssize_t sz;
+
+        sz = read(trace_fd, buf, sizeof(buf) - 1);
+        if (sz> 0) {
+            buf[sz] = 0;
+            puts(buf);
+        }
+    }
+}
+
+/* set rlimit (required for every app) */
+static void bump_memlock_rlimit(void)
+{
+    struct rlimit rlim_new = {
+        .rlim_cur = RLIM_INFINITY,
+        .rlim_max = RLIM_INFINITY,
+    };
+
+    if (setrlimit(RLIMIT_MEMLOCK, &rlim_new)) {
+        fprintf(stderr, "Failed to increase RLIMIT_MEMLOCK limit!\n");
+        exit(1);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    struct hello_bpf *skel;
+    int err;
+
+    /* Set up libbpf errors and debug info callback */
+    libbpf_set_print(libbpf_print_fn);
+
+    /* Bump RLIMIT_MEMLOCK to allow BPF sub-system to do anything */
+    bump_memlock_rlimit();
+
+    /* Open BPF application */
+    skel = hello_bpf__open();
+    if (!skel) {
+        fprintf(stderr, "Failed to open BPF skeleton\n");
+        return 1;
+    }
+
+    /* Load & verify BPF programs */
+    err = hello_bpf__load(skel);
+    if (err) {
+        fprintf(stderr, "Failed to load and verify BPF skeleton\n");
+        goto cleanup;
+    }
+
+    /* Attach tracepoint handler */
+    err = hello_bpf__attach(skel);
+    if (err) {
+        fprintf(stderr, "Failed to attach BPF skeleton\n");
+        goto cleanup;
+    }
+
+    printf("Hello BPF started, hit Ctrl+C to stop!\n");
+
+    read_trace_pipe();
+
+cleanup:
+    hello_bpf__destroy(skel);
+    return -err;
+}
+更新 Makefile 的 APPS 列表
+
+APPS = minimal bootstrap uprobe hello
+最后，编译运行 hello 程序：
+
+$ make
+  BPF      .output/hello.bpf.o
+  GEN-SKEL .output/hello.skel.h
+  CC       .output/hello.o
+  BINARY   hello
+$ ./hello
+Hello BPF started, hit Ctrl+C to stop!
+<...>-241424  [006] d... 202520.596987: bpf_trace_printk: BPF triggered from PID 241424.
+可以发现，用 libbpf-bootstrap 开发 BPF 程序非常方便。其源码库中三个示例的解析可以参考 Building BPF applications with libbpf-bootstrap，而更多的示例则可以查看 BCC 中的 libbpf-tools。
+
+注意： libbpf 需要开启内核选项 CONFIG_DEBUG_INFO_BTF=y 以及 CONFIG_DEBUG_INFO=y。在编译内核时，推荐安装 pahole 1.16+，否则的话，就无法生成 BTF。 或者，也可以从 https://kernel.ubuntu.com/~kernel-ppa/mainline/ 直接下载已经默认开启这些选项的内核 DEB 包（比如 v5.10.9）。
