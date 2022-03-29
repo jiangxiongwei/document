@@ -140,6 +140,8 @@ $ make
 $ ./hello
 Hello BPF started, hit Ctrl+C to stop!
 <...>-241424  [006] d... 202520.596987: bpf_trace_printk: BPF triggered from PID 241424.
-可以发现，用 libbpf-bootstrap 开发 BPF 程序非常方便。其源码库中三个示例的解析可以参考 Building BPF applications with libbpf-bootstrap，而更多的示例则可以查看 BCC 中的 libbpf-tools。
+可以发现，用 libbpf-bootstrap 开发 BPF 程序非常方便。
+其源码库中三个示例的解析可以参考 Building BPF applications with libbpf-bootstrap(https://nakryiko.com/posts/libbpf-bootstrap/)
+更多的示例则可以查看 BCC 中的 libbpf-tools。
 
 注意： libbpf 需要开启内核选项 CONFIG_DEBUG_INFO_BTF=y 以及 CONFIG_DEBUG_INFO=y。在编译内核时，推荐安装 pahole 1.16+，否则的话，就无法生成 BTF。 或者，也可以从 https://kernel.ubuntu.com/~kernel-ppa/mainline/ 直接下载已经默认开启这些选项的内核 DEB 包（比如 v5.10.9）。
